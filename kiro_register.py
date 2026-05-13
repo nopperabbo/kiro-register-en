@@ -495,7 +495,9 @@ async def _click_submit(page, label_contains=None, timeout=10000):
 def _parse_proxy_url(url):
     """Parse a proxy URL like http://user:pass@host:port into a Playwright proxy dict.
 
-    Returns None if the URL is empty / malformed.
+    Returns None if the URL is empty / malformed. The returned dict includes a
+    `bypass` string that keeps localhost traffic direct so the local OAuth
+    callback server (127.0.0.1:3128) doesn't get routed through the proxy.
     """
     if not url:
         return None
@@ -507,7 +509,12 @@ def _parse_proxy_url(url):
         return None
     scheme = p.scheme or "http"
     server = f"{scheme}://{p.hostname}:{p.port}"
-    out = {"server": server}
+    out = {
+        "server": server,
+        # Keep the local callback server direct — proxies can't forward to the
+        # client's own 127.0.0.1 and return HTTP 400 when they try.
+        "bypass": "127.0.0.1,localhost,*.local",
+    }
     if p.username:
         out["username"] = p.username
     if p.password:

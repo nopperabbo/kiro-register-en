@@ -15,10 +15,12 @@ Adding a new provider:
 from .base import MailProvider
 from .shiromail import ShiroMailProvider
 from .yydsmail import YydsMailProvider
+from .gsuite_imap import GsuiteImapProvider
 
 PROVIDERS: dict[str, type[MailProvider]] = {
     "shiromail": ShiroMailProvider,
     "yydsmail": YydsMailProvider,
+    "gsuite_imap": GsuiteImapProvider,
 }
 
 

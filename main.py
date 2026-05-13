@@ -1247,12 +1247,53 @@ class App(tk.Tk):
         self._reg_mail_key_entry = ttk.Entry(row2, textvariable=self._reg_mail_key, width=45, show="*")
         self._reg_mail_key_entry.pack(side="left", padx=4)
 
+        # Self-hosted catch-all IMAP rows (visible only when gsuite_imap is selected).
+        self._imap_rows = []
+        row_imap1 = ttk.Frame(mail_frame)
+        ttk.Label(row_imap1, text="IMAP host:", width=10).pack(side="left")
+        self._reg_imap_server = tk.StringVar(value=cfg.get("imap_server", "imap.gmail.com"))
+        ttk.Entry(row_imap1, textvariable=self._reg_imap_server, width=28).pack(side="left", padx=4)
+        ttk.Label(row_imap1, text="Port:").pack(side="left", padx=(8, 2))
+        self._reg_imap_port = tk.StringVar(value=str(cfg.get("imap_port", 993)))
+        ttk.Entry(row_imap1, textvariable=self._reg_imap_port, width=6).pack(side="left", padx=2)
+        self._imap_rows.append(row_imap1)
+
+        row_imap2 = ttk.Frame(mail_frame)
+        ttk.Label(row_imap2, text="IMAP user:", width=10).pack(side="left")
+        self._reg_imap_user = tk.StringVar(value=cfg.get("imap_user", ""))
+        ttk.Entry(row_imap2, textvariable=self._reg_imap_user, width=45).pack(side="left", padx=4)
+        self._imap_rows.append(row_imap2)
+
+        row_imap3 = ttk.Frame(mail_frame)
+        ttk.Label(row_imap3, text="IMAP pass:", width=10).pack(side="left")
+        self._reg_imap_pass = tk.StringVar(value=cfg.get("imap_pass", ""))
+        ttk.Entry(row_imap3, textvariable=self._reg_imap_pass, width=45, show="*").pack(side="left", padx=4)
+        ttk.Label(row_imap3, text="(Gmail: use an app password)", foreground="#8b949e").pack(side="left", padx=4)
+        self._imap_rows.append(row_imap3)
+
+        row_imap4 = ttk.Frame(mail_frame)
+        ttk.Label(row_imap4, text="Domains:", width=10).pack(side="left")
+        default_domains_file = str((Path(getattr(sys, "_MEIPASS", ".")) / "domains.txt").resolve()) \
+            if hasattr(sys, "_MEIPASS") else "domains.txt"
+        self._reg_imap_domains_file = tk.StringVar(value=cfg.get("imap_domains_file", default_domains_file))
+        ttk.Entry(row_imap4, textvariable=self._reg_imap_domains_file, width=45).pack(side="left", padx=4)
+        ttk.Label(row_imap4, text="(path to domains.txt, one domain per line)",
+                  foreground="#8b949e").pack(side="left", padx=4)
+        self._imap_rows.append(row_imap4)
+
         def _on_provider_change(*_):
             display = self._reg_mail_provider.get()
             name = self._reg_provider_name_map.get(display, "shiromail")
             if name == "shiromail":
                 self._reg_mail_key_entry.configure(state="normal")
                 self._reg_domain_combo.configure(state="readonly")
+            # Hide/show IMAP-only rows based on provider.
+            show_imap = (name == "gsuite_imap")
+            for r in self._imap_rows:
+                if show_imap:
+                    r.pack(fill="x", pady=2)
+                else:
+                    r.pack_forget()
         self._reg_mail_provider.trace_add("write", _on_provider_change)
         _on_provider_change()
 
@@ -1312,6 +1353,11 @@ class App(tk.Tk):
                 "mail_url": self._reg_mail_url.get().strip(),
                 "mail_key": self._reg_mail_key.get().strip(),
                 "mail_domain_id": domain_val,
+                "imap_server": self._reg_imap_server.get().strip(),
+                "imap_port": self._reg_imap_port.get().strip(),
+                "imap_user": self._reg_imap_user.get().strip(),
+                "imap_pass": self._reg_imap_pass.get().strip(),
+                "imap_domains_file": self._reg_imap_domains_file.get().strip(),
                 "cdk_code": self._reg_cdk_code.get().strip(),
                 "yescaptcha_key": self._reg_yescaptcha_key.get().strip(),
                 "multibot_key": self._reg_multibot_key.get().strip(),
@@ -1323,6 +1369,11 @@ class App(tk.Tk):
         self._reg_mail_url.trace_add("write", _save_mail_config)
         self._reg_mail_key.trace_add("write", _save_mail_config)
         self._reg_mail_domain_id.trace_add("write", _save_mail_config)
+        self._reg_imap_server.trace_add("write", _save_mail_config)
+        self._reg_imap_port.trace_add("write", _save_mail_config)
+        self._reg_imap_user.trace_add("write", _save_mail_config)
+        self._reg_imap_pass.trace_add("write", _save_mail_config)
+        self._reg_imap_domains_file.trace_add("write", _save_mail_config)
         self._reg_cdk_code.trace_add("write", _save_mail_config)
         self._reg_yescaptcha_key.trace_add("write", _save_mail_config)
         self._reg_multibot_key.trace_add("write", _save_mail_config)
@@ -1777,10 +1828,26 @@ class App(tk.Tk):
         # Build the provider instance based on the selected service
         provider_display = self._reg_mail_provider.get()
         provider_name = self._reg_provider_name_map.get(provider_display, "shiromail")
-        provider_kwargs = {"base_url": mail_url or ""}
-        if provider_name == "shiromail":
-            provider_kwargs["api_key"] = mail_key or ""
-            provider_kwargs["domain_id"] = mail_domain_id
+        if provider_name == "gsuite_imap":
+            # Self-hosted catch-all: IMAP credentials + domain pool from domains.txt.
+            domains_file = (self._reg_imap_domains_file.get().strip()
+                            or str(Path(__file__).resolve().parent / "domains.txt"))
+            try:
+                imap_port_int = int(self._reg_imap_port.get().strip() or 993)
+            except ValueError:
+                imap_port_int = 993
+            provider_kwargs = {
+                "imap_server": self._reg_imap_server.get().strip() or "imap.gmail.com",
+                "imap_port": imap_port_int,
+                "imap_user": self._reg_imap_user.get().strip(),
+                "imap_pass": self._reg_imap_pass.get().strip(),
+                "domains_file": domains_file,
+            }
+        else:
+            provider_kwargs = {"base_url": mail_url or ""}
+            if provider_name == "shiromail":
+                provider_kwargs["api_key"] = mail_key or ""
+                provider_kwargs["domain_id"] = mail_domain_id
         mail_instance = get_provider(provider_name, **provider_kwargs)
 
         if use_roxy:

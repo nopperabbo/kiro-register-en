@@ -66,10 +66,21 @@ A desktop window opens. On first launch the app generates `kiro_config.json` nex
 
 ### First-run checklist inside the GUI
 
-1. **Mail provider tab.** Pick a provider (ShiroMail or YYDSMail), paste its base URL and API key, choose a domain, click *Test*.
+1. **Mail provider tab.** Pick a provider (ShiroMail, YYDSMail, or **Gsuite/IMAP (self-hosted)**), fill its configuration, choose a domain (where applicable), click *Test*.
 2. **Captcha tab (optional).** Paste an API key for either **YesCaptcha** or **Multibot**, then pick the active provider from the dropdown. Without any key the tool falls back to manual solving and registration will pause for you.
 3. **Registration tab.** Set the concurrency, pick headless or headed mode, click *Start*. Progress streams into the log pane.
 4. **Accounts tab.** Inspect every account's token, expiry, trial status, and ban state. Refresh or re-subscribe from the toolbar.
+
+### Self-hosted mail with Gsuite/IMAP catch-all
+
+If you own a pool of domains whose MX records catch-all forward into a Gmail or Workspace inbox, you can skip paid temp-mail services entirely:
+
+1. Point every domain's MX to Gmail/Workspace (`ASPMX.L.GOOGLE.COM` chain) or use Cloudflare Email Routing with a catch-all rule to a Gmail address.
+2. In the receiving account, enable IMAP and generate an app password (Google → Account → 2FA → App passwords).
+3. List your domains in `domains.txt` next to `main.py` (one per line). A ready-made list of 27 sample `.tech` domains ships in the repo — replace it with your own.
+4. In the GUI pick *Gsuite/IMAP (self-hosted)* and fill IMAP host (`imap.gmail.com`), port (`993`), user (`you@gmail.com`), pass (the app password), and the path to `domains.txt`.
+
+Registration then invents a unique `<random>@<random-domain>` alias per account, polls the inbox by `To:` header, and extracts the 6-digit OTP automatically.
 
 ## Packaging a Windows .exe
 
@@ -96,7 +107,8 @@ captcha_solver.py    # hCaptcha solver (pluggable: YesCaptcha or Multibot)
 roxy_register.py     # Registration via RoxyBrowser fingerprint profiles
 build.py             # PyInstaller packaging driver
 build.bat            # Windows one-shot build entry point
-mail_providers/      # Pluggable temp-mail backends
+domains.txt          # Domain pool used by the gsuite_imap provider (one per line)
+mail_providers/      # Pluggable temp-mail backends (shiromail, yydsmail, gsuite_imap)
   base.py            # Abstract MailProvider base class
   shiromail.py       # ShiroMail implementation
   yydsmail.py        # YYDSMail implementation

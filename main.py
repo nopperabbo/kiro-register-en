@@ -1483,20 +1483,51 @@ class App(tk.Tk):
         # Check playwright browser is installed
         try:
             from playwright._impl._driver import compute_driver_executable
-            driver_exec = compute_driver_executable()
+            driver_result = compute_driver_executable()
+            # compute_driver_executable() returns either a string or a (node, cli) tuple
+            # depending on the playwright version; normalise to the cli path.
+            if isinstance(driver_result, tuple):
+                driver_exec = driver_result[1]
+            else:
+                driver_exec = driver_result
             if not Path(driver_exec).exists():
                 raise FileNotFoundError(driver_exec)
         except Exception:
             try:
+                # Look for a downloaded browser binary in the platform-specific cache.
+                # Playwright stores them in:
+                #   macOS:   ~/Library/Caches/ms-playwright/
+                #   Linux:   ~/.cache/ms-playwright/
+                #   Windows: %USERPROFILE%/AppData/Local/ms-playwright/
+                import sys as _sys
+                candidates = []
+                if _sys.platform == "darwin":
+                    candidates.append(Path.home() / "Library" / "Caches" / "ms-playwright")
+                elif _sys.platform.startswith("win"):
+                    candidates.append(Path.home() / "AppData" / "Local" / "ms-playwright")
+                else:
+                    candidates.append(Path.home() / ".cache" / "ms-playwright")
+                # Also look at the package-local fallback
                 import playwright._impl._driver as _drv
-                browsers_path = Path(_drv.__file__).parent.parent / "driver" / "package" / ".local-browsers"
-                if not browsers_path.exists():
-                    user_browsers = Path.home() / "AppData" / "Local" / "ms-playwright"
-                    if not user_browsers.exists():
-                        self._reg_term.delete("1.0", "end")
-                        self._reg_term.insert("end", "Playwright Browser not installed; please run:\n\n", "err")
-                        self._reg_term.insert("end", "  playwright install chromium\n", "highlight")
-                        return
+                candidates.append(Path(_drv.__file__).parent.parent / "driver" / "package" / ".local-browsers")
+                # Honour PLAYWRIGHT_BROWSERS_PATH env override
+                import os as _os
+                env_path = _os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+                if env_path:
+                    candidates.insert(0, Path(env_path))
+                # Look for any chromium-* directory in candidates
+                browser_found = False
+                for cand in candidates:
+                    if cand.exists():
+                        chromium_dirs = list(cand.glob("chromium-*"))
+                        if chromium_dirs:
+                            browser_found = True
+                            break
+                if not browser_found:
+                    self._reg_term.delete("1.0", "end")
+                    self._reg_term.insert("end", "Playwright Browser not installed; please run:\n\n", "err")
+                    self._reg_term.insert("end", "  playwright install chromium\n", "highlight")
+                    return
             except Exception:
                 pass
 

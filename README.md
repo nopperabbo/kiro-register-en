@@ -152,6 +152,18 @@ The hCaptcha solver is pluggable. Pick one at runtime via either the GUI dropdow
 
 Both keys can be stored simultaneously — only the provider selected in `CAPTCHA_PROVIDER` / the GUI dropdown is used for the active run.
 
+## Residential proxy (recommended for TES-heavy flows)
+
+AWS ships a Trust Evaluation Service (TES) in front of `signin.aws` / `profile.aws`. Suspicious IPs get the `create-identity` API blocked with `errorCode=BLOCKED`, and since OTPs are consumed server-side, a first-shot block burns the whole account.
+
+To avoid getting flagged, drive the browser through a residential proxy:
+
+1. Grab a proxy URL from any residential provider (DataImpulse, IPRoyal, Bright Data, Smartproxy, etc.). Format: `http://user:pass@host:port`.
+2. Open the **Settings** tab and paste the URL into the **Proxy URL** field. It's persisted into `kiro_config.json`.
+3. Leave **Headless** unchecked — TES also profiles headless Chrome.
+
+Both the inner `curl_cffi` session (OIDC client registration, token exchange) and Playwright's Chromium launch are routed through the configured proxy.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -161,6 +173,8 @@ Both keys can be stored simultaneously — only the provider selected in `CAPTCH
 | hCaptcha never solves | Open Settings, paste a key for either YesCaptcha or Multibot, then pick the active provider in the dropdown — empty key = manual solve |
 | `401` on subscription flow | Token expired or account banned. Inspect the account row in the Accounts tab |
 | Registration hangs on email OTP | Mail provider unreachable or API key wrong — test it in the Mail provider tab |
+| `create-identity -> 400 BLOCKED by TES` | AWS TES flagged the session. Configure a residential proxy (above) and retry with a fresh account. |
+| OTP received but `INVALID_OTP` on every submit | The first TES block consumed the OTP server-side; the retry loop now short-circuits on the second `INVALID_OTP` so you don't keep burning retries. Root fix is the same: add a proxy. |
 
 ## Credits
 

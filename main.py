@@ -1274,6 +1274,24 @@ class App(tk.Tk):
         ttk.Entry(yc_row, textvariable=self._reg_yescaptcha_key, width=45).pack(side="left", padx=4)
         ttk.Label(yc_row, text="(API Key, Used to auto-solve hCaptcha)", foreground="#8b949e").pack(side="left", padx=4)
 
+        # Multibot (multibot.cloud) — alternative captcha provider
+        mb_row = ttk.Frame(cdk_frame)
+        mb_row.pack(fill="x", pady=2)
+        ttk.Label(mb_row, text="Multibot:", width=8).pack(side="left")
+        self._reg_multibot_key = tk.StringVar(value=cfg.get("multibot_key", ""))
+        ttk.Entry(mb_row, textvariable=self._reg_multibot_key, width=45).pack(side="left", padx=4)
+        ttk.Label(mb_row, text="(API Key for multibot.cloud, alternative hCaptcha solver)", foreground="#8b949e").pack(side="left", padx=4)
+
+        # Captcha provider selector
+        cap_row = ttk.Frame(cdk_frame)
+        cap_row.pack(fill="x", pady=2)
+        ttk.Label(cap_row, text="Provider:", width=8).pack(side="left")
+        self._reg_captcha_provider = tk.StringVar(value=cfg.get("captcha_provider", "yescaptcha"))
+        ttk.Combobox(cap_row, textvariable=self._reg_captcha_provider,
+                     values=["yescaptcha", "multibot"], state="readonly",
+                     width=20).pack(side="left", padx=4)
+        ttk.Label(cap_row, text="(Active hCaptcha solver)", foreground="#8b949e").pack(side="left", padx=4)
+
         # RoxyBrowser Fingerprint browser config
         roxy_row = ttk.Frame(cdk_frame)
         roxy_row.pack(fill="x", pady=2)
@@ -1296,6 +1314,8 @@ class App(tk.Tk):
                 "mail_domain_id": domain_val,
                 "cdk_code": self._reg_cdk_code.get().strip(),
                 "yescaptcha_key": self._reg_yescaptcha_key.get().strip(),
+                "multibot_key": self._reg_multibot_key.get().strip(),
+                "captcha_provider": self._reg_captcha_provider.get().strip() or "yescaptcha",
                 "roxy_api_key": self._reg_roxy_key.get().strip(),
                 "auto_refresh_min": self._auto_refresh_min.get().strip(),
             })
@@ -1305,6 +1325,8 @@ class App(tk.Tk):
         self._reg_mail_domain_id.trace_add("write", _save_mail_config)
         self._reg_cdk_code.trace_add("write", _save_mail_config)
         self._reg_yescaptcha_key.trace_add("write", _save_mail_config)
+        self._reg_multibot_key.trace_add("write", _save_mail_config)
+        self._reg_captcha_provider.trace_add("write", _save_mail_config)
         self._reg_roxy_key.trace_add("write", _save_mail_config)
 
         # Terminal output
@@ -1793,13 +1815,27 @@ class App(tk.Tk):
         import os as _os
         from stripe_pay import auto_pay
 
-        # Ensure the YesCaptcha key is usable
+        # Ensure the captcha solver is wired up.
         cfg = load_config()
         yescaptcha_key = self._reg_yescaptcha_key.get().strip()
-        if not yescaptcha_key:
-            log("YesCaptcha API key not configured; hCaptcha cannot be solved automatically", "warn")
+        multibot_key = self._reg_multibot_key.get().strip()
+        captcha_provider = (self._reg_captcha_provider.get().strip() or "yescaptcha")
+        if captcha_provider == "multibot":
+            if not multibot_key:
+                log("Multibot API key not configured; hCaptcha cannot be solved automatically", "warn")
+            else:
+                _os.environ["MULTIBOT_API_KEY"] = multibot_key
         else:
+            if not yescaptcha_key:
+                log("YesCaptcha API key not configured; hCaptcha cannot be solved automatically", "warn")
+            else:
+                _os.environ["YESCAPTCHA_API_KEY"] = yescaptcha_key
+        # Propagate both keys + the selected provider so the child flow can dispatch.
+        if yescaptcha_key:
             _os.environ["YESCAPTCHA_API_KEY"] = yescaptcha_key
+        if multibot_key:
+            _os.environ["MULTIBOT_API_KEY"] = multibot_key
+        _os.environ["CAPTCHA_PROVIDER"] = captcha_provider
 
         access_token = result.get("accessToken", "")
         profile_arn = FIXED_PROFILE_ARNS.get("BuilderId", "")
@@ -1858,7 +1894,11 @@ class App(tk.Tk):
             return
 
         # Step 4: Use EFunCard + Stripe Auto-pay
-        captcha_cfg = {"yescaptcha_key": yescaptcha_key}
+        captcha_cfg = {
+            "yescaptcha_key": yescaptcha_key,
+            "multibot_key": multibot_key,
+            "provider": captcha_provider,
+        }
         pay_result = await auto_pay(
             payment_url, cdk_code, captcha_config=captcha_cfg, headless=True, log=log
         )

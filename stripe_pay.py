@@ -503,11 +503,18 @@ async def auto_pay(payment_url, cdk_code, gemini_key=None, captcha_config=None, 
     2. Fill the Stripe form
     3. Handle verifications and submit (hCaptcha + 3DS)
 
-    captcha_config: dict with keys: yescaptcha_key (recommended)
+    captcha_config: dict with keys:
+        - yescaptcha_key: YesCaptcha API key
+        - multibot_key:   Multibot API key
+        - provider:       'yescaptcha' (default) or 'multibot'
     """
     if captcha_config:
         if captcha_config.get("yescaptcha_key"):
             os.environ["YESCAPTCHA_API_KEY"] = captcha_config["yescaptcha_key"]
+        if captcha_config.get("multibot_key"):
+            os.environ["MULTIBOT_API_KEY"] = captcha_config["multibot_key"]
+        if captcha_config.get("provider"):
+            os.environ["CAPTCHA_PROVIDER"] = captcha_config["provider"]
         if captcha_config.get("api_key"):
             os.environ["CAPTCHA_API_KEY"] = captcha_config["api_key"]
     elif gemini_key:
@@ -587,6 +594,8 @@ if __name__ == "__main__":
 
     captcha_cfg = {
         "yescaptcha_key": os.environ.get("YESCAPTCHA_API_KEY", ""),
+        "multibot_key": os.environ.get("MULTIBOT_API_KEY", ""),
+        "provider": os.environ.get("CAPTCHA_PROVIDER", "yescaptcha"),
     }
 
     asyncio.run(auto_pay(payment_url, cdk_code, captcha_config=captcha_cfg, headless=True))

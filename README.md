@@ -22,7 +22,7 @@ An automation toolkit for AWS Builder ID accounts — batch registration, token 
 - Python 3.11+ (the prebuilt Windows release targets 3.11)
 - Windows, macOS, or Linux (the GUI uses Tkinter — bundled with CPython on Windows/macOS; on Linux you may need `sudo apt install python3-tk`)
 - A working network connection (registration hits AWS OIDC endpoints)
-- Optional: a [YesCaptcha](https://yescaptcha.com) API key if you want automatic hCaptcha solving
+- Optional: a [YesCaptcha](https://yescaptcha.com) or [Multibot](https://multibot.cloud) API key if you want automatic hCaptcha solving
 
 ## Installation
 
@@ -67,7 +67,7 @@ A desktop window opens. On first launch the app generates `kiro_config.json` nex
 ### First-run checklist inside the GUI
 
 1. **Mail provider tab.** Pick a provider (ShiroMail or YYDSMail), paste its base URL and API key, choose a domain, click *Test*.
-2. **Captcha tab (optional).** Paste your YesCaptcha API key. Without a key the tool falls back to manual solving and registration will pause for you.
+2. **Captcha tab (optional).** Paste an API key for either **YesCaptcha** or **Multibot**, then pick the active provider from the dropdown. Without any key the tool falls back to manual solving and registration will pause for you.
 3. **Registration tab.** Set the concurrency, pick headless or headed mode, click *Start*. Progress streams into the log pane.
 4. **Accounts tab.** Inspect every account's token, expiry, trial status, and ban state. Refresh or re-subscribe from the toolbar.
 
@@ -92,7 +92,7 @@ kiro_register.py     # Registration state machine
 kiro_subscribe.py    # Subscription management API
 kiro_login.py        # Manual login helper (OAuth token capture)
 stripe_pay.py        # Stripe Checkout automation
-captcha_solver.py    # hCaptcha solver via YesCaptcha
+captcha_solver.py    # hCaptcha solver (pluggable: YesCaptcha or Multibot)
 roxy_register.py     # Registration via RoxyBrowser fingerprint profiles
 build.py             # PyInstaller packaging driver
 build.bat            # Windows one-shot build entry point
@@ -123,9 +123,22 @@ Auto-generated on first run. Example:
     "domain_id": 1
   },
   "yescaptcha_api_key": "",
+  "multibot_key": "",
+  "captcha_provider": "yescaptcha",
   "cdk_codes": []
 }
 ```
+
+## Captcha providers
+
+The hCaptcha solver is pluggable. Pick one at runtime via either the GUI dropdown or the `CAPTCHA_PROVIDER` env var:
+
+| Provider | Env var for the key | Endpoint | Notes |
+|---|---|---|---|
+| `yescaptcha` (default) | `YESCAPTCHA_API_KEY` | `https://api.yescaptcha.com` | JSON API; simpler pricing tiers |
+| `multibot` | `MULTIBOT_API_KEY` | `https://api.multibot.cloud` | Cheaper per-solve; classic 2captcha-style API |
+
+Both keys can be stored simultaneously — only the provider selected in `CAPTCHA_PROVIDER` / the GUI dropdown is used for the active run.
 
 ## Troubleshooting
 
@@ -133,7 +146,7 @@ Auto-generated on first run. Example:
 |---|---|
 | `playwright._impl._api_types.Error: Executable doesn't exist` | Run `python -m playwright install chromium` |
 | GUI opens but crashes immediately on Linux | Missing Tk: `sudo apt install python3-tk` |
-| hCaptcha never solves | Check `YESCAPTCHA_API_KEY` env or the GUI captcha field — empty key = manual solve |
+| hCaptcha never solves | Open Settings, paste a key for either YesCaptcha or Multibot, then pick the active provider in the dropdown — empty key = manual solve |
 | `401` on subscription flow | Token expired or account banned. Inspect the account row in the Accounts tab |
 | Registration hangs on email OTP | Mail provider unreachable or API key wrong — test it in the Mail provider tab |
 

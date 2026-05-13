@@ -800,7 +800,13 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
             await context.add_init_script(_build_fingerprint_script(fp_config))
 
             await page.goto(signin_url, timeout=60000)
-            await page.wait_for_load_state("networkidle", timeout=30000)
+            # networkidle can never fire on ad/analytics-heavy pages; prefer
+            # domcontentloaded and fall back to a fixed settle window when
+            # even that stalls (common over a residential proxy).
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            except Exception:
+                pass
             await asyncio.sleep(3)
             await _dismiss_cookie(page)
 
@@ -857,7 +863,10 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
                     "code_challenge_method": "S256",
                 })
                 await page.goto(authorize_url, timeout=60000)
-                await page.wait_for_load_state("networkidle", timeout=30000)
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                except Exception:
+                    pass
                 await asyncio.sleep(3)
 
             # Wait until we land on signin.aws or profile.aws.
@@ -1404,7 +1413,18 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
 
             await browser.close()
     finally:
-        callback_server.shutdown()
+        # `shutdown` stops the serve_forever loop, `server_close` releases the
+        # listening socket. Without server_close the socket stays bound until
+        # the owning Python process exits -- which broke retry #2..5 in the
+        # same GUI session.
+        try:
+            callback_server.shutdown()
+        except Exception:
+            pass
+        try:
+            callback_server.server_close()
+        except Exception:
+            pass
 
     # Phase 7: token exchange
     if not authorization_code:

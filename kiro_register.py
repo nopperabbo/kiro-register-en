@@ -492,9 +492,33 @@ async def _click_submit(page, label_contains=None, timeout=10000):
     return False
 
 
+def _parse_proxy_url(url):
+    """Parse a proxy URL like http://user:pass@host:port into a Playwright proxy dict.
+
+    Returns None if the URL is empty / malformed.
+    """
+    if not url:
+        return None
+    try:
+        p = urlparse(url.strip())
+    except Exception:
+        return None
+    if not p.hostname or not p.port:
+        return None
+    scheme = p.scheme or "http"
+    server = f"{scheme}://{p.hostname}:{p.port}"
+    out = {"server": server}
+    if p.username:
+        out["username"] = p.username
+    if p.password:
+        out["password"] = p.password
+    return out
+
+
 async def register(headless=True, auto_login=True, skip_onboard=True,
                    mail_url=None, mail_key=None, mail_domain_id=None,
                    mail_provider_instance=None,
+                   proxy_url=None,
                    log=print, cancel_check=None):
     """
     Run the full Kiro auto-registration flow.
@@ -507,6 +531,8 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
         mail_key: API key (ShiroMail requires one)
         mail_domain_id: domain ID (ShiroMail requires one)
         mail_provider_instance: pre-built MailProvider instance (preferred when supplied)
+        proxy_url: optional HTTP/SOCKS proxy URL (http://user:pass@host:port).
+                   When set, all outbound traffic (curl_cffi + Playwright) routes through it.
         log: logging callback; called as log(msg, level)
         cancel_check: callable that returns True to abort
     Returns:
@@ -525,7 +551,17 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
         f"{fp_config['viewport']['width']}x{fp_config['viewport']['height']}, "
         f"{fp_config['timezone']}", "dbg")
 
-    s = curl_requests.Session(impersonate="chrome131")
+    pw_proxy = _parse_proxy_url(proxy_url)
+    if pw_proxy:
+        log(f"Proxy enabled: {pw_proxy['server']}", "ok")
+
+    if proxy_url:
+        s = curl_requests.Session(
+            impersonate="chrome131",
+            proxies={"http": proxy_url, "https": proxy_url},
+        )
+    else:
+        s = curl_requests.Session(impersonate="chrome131")
     if mail_provider_instance:
         mail = mail_provider_instance
     else:
@@ -655,7 +691,10 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
             if headless:
                 launch_args += ["--disable-gpu", "--no-sandbox",
                                 "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-            browser = await p.chromium.launch(headless=headless, args=launch_args)
+            launch_kwargs = {"headless": headless, "args": launch_args}
+            if pw_proxy:
+                launch_kwargs["proxy"] = pw_proxy
+            browser = await p.chromium.launch(**launch_kwargs)
             context = await browser.new_context(
                 viewport=fp_config["viewport"],
                 screen=fp_config["screen"],
@@ -668,6 +707,10 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
             page = await context.new_page()
             await Stealth().apply_stealth_async(page)
 
+            # Track the latest create-identity outcome so the OTP retry loop can
+            # short-circuit on fatal errors (OTP consumed, account banned, etc).
+            create_identity_status = {"code": None, "body": ""}
+
             # Intercept profile.aws API responses for debugging visibility.
             async def _on_profile_response(response):
                 url = response.url
@@ -676,6 +719,16 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
                         body = await response.text()
                         endpoint = url.split("/api/")[-1]
                         log(f"[API] {endpoint} -> {response.status} {body[:150]}", "dbg")
+                        if "create-identity" in endpoint:
+                            err_code = ""
+                            try:
+                                import json as _j
+                                parsed = _j.loads(body)
+                                err_code = parsed.get("errorCode", "")
+                            except Exception:
+                                pass
+                            create_identity_status["code"] = err_code
+                            create_identity_status["body"] = body
                     except Exception:
                         pass
             page.on("response", _on_profile_response)
@@ -1067,13 +1120,18 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
                 await otp_input.click()
                 await asyncio.sleep(_random.uniform(0.3, 0.6))
                 # Type the OTP char by char; avoid fill() to sidestep React controlled-input issues.
+                # Slower-than-typical inter-key delay so the cadence looks human (TES monitors timing).
                 for ch in otp_code:
                     await page.keyboard.type(ch, delay=0)
-                    await asyncio.sleep(_random.uniform(0.05, 0.15))
-                await _human_delay(0.8, 1.5)
+                    await asyncio.sleep(_random.uniform(0.18, 0.42))
+                await _human_delay(1.2, 2.2)
 
                 # Submit the OTP; TES may block the first attempt, so retry with growing gaps and more human noise.
+                otp_dead = False
                 for attempt in range(5):
+                    # Reset the response tracker for this attempt so we observe a fresh outcome.
+                    create_identity_status["code"] = None
+                    create_identity_status["body"] = ""
                     try:
                         await page.evaluate("""() => {
                             const buttons = Array.from(document.querySelectorAll('button'));
@@ -1090,12 +1148,19 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
                         await page.keyboard.press("Enter")
                     log(f"OTP submitted ({attempt+1}/5)")
                     # Progressive back-off: TES needs more time to re-evaluate after the first intercept.
-                    wait_time = 3 + attempt * 2
+                    wait_time = 4 + attempt * 3
                     await asyncio.sleep(wait_time)
                     new_state = await detect_state()
                     if new_state != "OTP":
                         log("OTP verified", "ok")
                         state = new_state
+                        break
+                    # If the API came back with INVALID_OTP the OTP has been consumed/expired
+                    # server-side; further retries cannot recover this account.
+                    api_err = create_identity_status["code"] or ""
+                    if api_err == "INVALID_OTP":
+                        log("OTP rejected as INVALID_OTP - server consumed/expired the code, aborting this account", "err")
+                        otp_dead = True
                         break
                     # Still on the OTP page: check for an error banner (TES intercept).
                     try:
@@ -1114,7 +1179,7 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
                                 _random.randint(200, 800), _random.randint(200, 500),
                                 steps=_random.randint(8, 15)
                             )
-                            await _human_delay(1.5, 3.0)
+                            await _human_delay(2.0, 4.0)
                             await _move_to_element(page, otp_input)
                             await otp_input.click()
                             await asyncio.sleep(_random.uniform(0.2, 0.4))
@@ -1126,10 +1191,15 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
                             # Retype char by char.
                             for ch in otp_code:
                                 await page.keyboard.type(ch, delay=0)
-                                await asyncio.sleep(_random.uniform(0.06, 0.18))
-                            await _human_delay(0.8, 1.5)
+                                await asyncio.sleep(_random.uniform(0.22, 0.48))
+                            await _human_delay(1.2, 2.2)
                     except Exception:
                         pass
+
+                if otp_dead:
+                    await browser.close()
+                    callback_server.shutdown()
+                    return _partial_result("OTP rejected (consumed/expired)")
 
             # Phase 5: password setup
             if state not in ["DONE", "CONSENT", "CALLBACK"]:

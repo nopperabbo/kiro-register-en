@@ -1179,7 +1179,7 @@ class App(tk.Tk):
         opts_frame = ttk.Frame(tab)
         opts_frame.pack(fill="x", pady=(0, 8))
 
-        self._reg_headless = tk.BooleanVar(value=True)
+        self._reg_headless = tk.BooleanVar(value=False)
         self._reg_auto_login = tk.BooleanVar(value=True)
         self._reg_skip_onboard = tk.BooleanVar(value=True)
         self._reg_pro_trial = tk.BooleanVar(value=True)
@@ -1341,6 +1341,16 @@ class App(tk.Tk):
         ttk.Entry(roxy_row, textvariable=self._reg_roxy_key, width=45).pack(side="left", padx=4)
         ttk.Label(roxy_row, text="(RoxyBrowser API Key, Check'Fingerprint browser' hour(s) used)", foreground="#8b949e").pack(side="left", padx=4)
 
+        # Proxy row (HTTP/SOCKS proxy URL with optional user:pass — applied to both
+        # curl_cffi session and Playwright browser launch).
+        proxy_row = ttk.Frame(mail_frame)
+        proxy_row.pack(fill="x", pady=2)
+        ttk.Label(proxy_row, text="Proxy URL:", width=18).pack(side="left")
+        self._reg_proxy_url = tk.StringVar(value=cfg.get("proxy_url", ""))
+        ttk.Entry(proxy_row, textvariable=self._reg_proxy_url, width=60).pack(side="left", padx=4)
+        ttk.Label(proxy_row, text="(http://user:pass@host:port - leave blank for direct)",
+                  foreground="#8b949e").pack(side="left", padx=4)
+
         # Persist automatically on value change
         def _save_mail_config(*_):
             domain_val = self._reg_mail_domain_id.get().strip()
@@ -1363,6 +1373,7 @@ class App(tk.Tk):
                 "multibot_key": self._reg_multibot_key.get().strip(),
                 "captcha_provider": self._reg_captcha_provider.get().strip() or "yescaptcha",
                 "roxy_api_key": self._reg_roxy_key.get().strip(),
+                "proxy_url": self._reg_proxy_url.get().strip(),
                 "auto_refresh_min": self._auto_refresh_min.get().strip(),
             })
         self._reg_mail_provider.trace_add("write", _save_mail_config)
@@ -1379,6 +1390,7 @@ class App(tk.Tk):
         self._reg_multibot_key.trace_add("write", _save_mail_config)
         self._reg_captcha_provider.trace_add("write", _save_mail_config)
         self._reg_roxy_key.trace_add("write", _save_mail_config)
+        self._reg_proxy_url.trace_add("write", _save_mail_config)
 
         # Terminal output
         term_frame = ttk.Frame(tab)
@@ -1881,6 +1893,8 @@ class App(tk.Tk):
                 provider_kwargs["domain_id"] = mail_domain_id
         mail_instance = get_provider(provider_name, **provider_kwargs)
 
+        proxy_url = self._reg_proxy_url.get().strip() if hasattr(self, "_reg_proxy_url") else ""
+
         if use_roxy:
             from roxy_register import register_with_roxy
             roxy_key = self._reg_roxy_key.get().strip()
@@ -1903,6 +1917,7 @@ class App(tk.Tk):
                 auto_login=auto_login,
                 skip_onboard=skip_onboard,
                 mail_provider_instance=mail_instance,
+                proxy_url=proxy_url,
                 log=self._reg_log,
                 cancel_check=lambda: self._reg_cancel,
             )

@@ -27,3 +27,9 @@ build_tmp/
 dist/
 *.exe
 *.spec
+
+# Local virtualenv
+.venv/
+
+# Local secrets (credentials live here)
+kiro_config.json

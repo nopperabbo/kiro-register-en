@@ -658,27 +658,83 @@ async def register(headless=True, auto_login=True, skip_onboard=True,
         def log_message(self_h, *args):
             pass
 
-    # Ensure the port is free.
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        sock.bind(("127.0.0.1", 3128))
-        sock.close()
-    except OSError:
-        sock.close()
+    # Ensure port 3128 is free before we bind the callback server.
+    # The fast path is a simple probe bind; on EADDRINUSE we attempt to
+    # reclaim the port by killing the stale owner. Windows uses netstat
+    # + taskkill; POSIX (macOS / Linux) uses lsof + kill.
+    def _free_port_3128():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            import subprocess
-            r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True)
-            for line in r.stdout.splitlines():
-                if ":3128" in line and "LISTENING" in line:
-                    pid = line.strip().split()[-1]
-                    if pid.isdigit() and int(pid) != os.getpid():
-                        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
-            await asyncio.sleep(1)
+            sock.bind(("127.0.0.1", 3128))
+            sock.close()
+            return True
+        except OSError:
+            sock.close()
+        import subprocess
+        killed = False
+        try:
+            if os.name == "nt":
+                r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True)
+                for line in r.stdout.splitlines():
+                    if ":3128" in line and "LISTENING" in line:
+                        pid = line.strip().split()[-1]
+                        if pid.isdigit() and int(pid) != os.getpid():
+                            subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+                            killed = True
+            else:
+                # macOS / Linux: lsof -t prints PIDs; signal each one that isn't us.
+                r = subprocess.run(
+                    ["lsof", "-tiTCP:3128", "-sTCP:LISTEN"],
+                    capture_output=True, text=True,
+                )
+                for pid_str in r.stdout.split():
+                    try:
+                        pid = int(pid_str)
+                    except ValueError:
+                        continue
+                    if pid != os.getpid():
+                        try:
+                            os.kill(pid, 15)  # SIGTERM first
+                        except Exception:
+                            pass
+                        killed = True
+                if killed:
+                    # Give the stale process a moment to release; escalate if it's stubborn.
+                    import time as _t
+                    _t.sleep(0.8)
+                    r2 = subprocess.run(
+                        ["lsof", "-tiTCP:3128", "-sTCP:LISTEN"],
+                        capture_output=True, text=True,
+                    )
+                    for pid_str in r2.stdout.split():
+                        try:
+                            pid = int(pid_str)
+                        except ValueError:
+                            continue
+                        if pid != os.getpid():
+                            try:
+                                os.kill(pid, 9)  # SIGKILL
+                            except Exception:
+                                pass
         except Exception:
             pass
+        if killed:
+            await_sleep_hint = True
+        else:
+            await_sleep_hint = False
+        return await_sleep_hint  # tells caller whether we need to wait & re-probe
 
-    callback_server = HTTPServer(("127.0.0.1", 3128), CallbackHandler)
+    needs_wait = _free_port_3128()
+    if needs_wait:
+        await asyncio.sleep(1.2)
+
+    try:
+        callback_server = HTTPServer(("127.0.0.1", 3128), CallbackHandler)
+    except OSError as e:
+        log(f"Could not bind 127.0.0.1:3128 ({e}). Another process still holds it - "
+            "try `lsof -tiTCP:3128 -sTCP:LISTEN | xargs kill -9` and retry.", "err")
+        return _partial_result("port 3128 busy")
     callback_server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv_thread = threading.Thread(target=callback_server.serve_forever, daemon=True)
     srv_thread.start()

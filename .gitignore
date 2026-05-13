@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Sensitive configuration
+kiro_config.json
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Ad-hoc test/capture scripts
+test_*.py
+capture_api.py
+captured_requests.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Build
+build/
+build_tmp/
+dist/
+*.exe
+*.spec
